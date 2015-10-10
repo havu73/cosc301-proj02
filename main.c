@@ -11,9 +11,10 @@
 #include <sys/stat.h>
 #include <poll.h>
 #include <signal.h>
-#define PROMPT "prompt > "
+#define PROMPT "prompt >>> "
 #define SEQUENTIAL 0 
 #define PARALLEL 1
+struct stat;
 /*
 char ** separate_command(char * buffer){
 		int i=0;
@@ -78,7 +79,33 @@ int main(int argc, char **argv) {
 	}
     return 0;
 }
+
 */
+
+char** tokenify(const char *s, const char * delimiter) {
+    // your code here
+    //char* s1=(char*)malloc(sizeof(char)*(strlen(s)+1));
+    char * s1=strdup(s);
+    char* token;
+    int size=0;
+    for (token=strtok(s1,delimiter);token!=NULL;token=strtok(NULL,delimiter)){
+        size++;
+    }
+    char** result;
+    result=(char**)malloc(sizeof(char*)*(size+1));
+    int i=0;
+    //char* s2=(char*)malloc(sizeof(char)*(strlen(s)+1));
+    char * s2=strdup(s);
+    char* token2;
+    for (token2=strtok(s2,delimiter);token2!=NULL;token2=strtok(NULL,delimiter)){
+        result[i]=strdup(token2);
+        i++;
+    }
+    result[i]=NULL;
+    free(s1);
+    free(s2);
+    return result;
+}
 
 
 void print_tokens(char *tokens[]) {
@@ -89,155 +116,97 @@ void print_tokens(char *tokens[]) {
     }
 }
 
-char** tokenify(const char *s, const char *delimit) {
-    char *copy1 = strdup(s);
-    char *saveptr1;
-	char *count = strtok_r(copy1, delimit, &saveptr1);
-    int len = 0;
-    while (count != NULL) {
-		len++;
-		count = strtok_r(NULL, delimit, &saveptr1);
-	}
-	free(copy1);
-	
-	char **tokens = malloc(sizeof(char *) * (len+1));
-    char *copy2 = strdup(s);
-    char *saveptr2;
-    char *token = strtok_r(copy2, delimit, &saveptr2);
-    int i = 0;
-    for (i = 0; token != NULL; i++) {
-		tokens[i] = strdup(token);
-		token = strtok_r(NULL, delimit, &saveptr2);
-	}
-	free(copy2);
-	tokens[i] = NULL;
-	return tokens;
-}
-
 void free_tokens(char **tokens) {
     int i = 0;
     while (tokens[i] != NULL) {
-        free(tokens[i]); // free each token
+        free(tokens[i]); // free each string
         i++;
     }
-    free(tokens); // then free the array of tokens
+    free(tokens); // then free the array
 }
-
-void create_process(char **one_command) {
-	pid_t tpid;
-	int child_pid = fork();
-	int child_status;
-	if (child_pid < 0) {
-		fprintf(stderr, "fork failed, could not create child process\n");
-	} 
-	else if (child_pid == 0) {
-	// child: execv this command line
-		if (execv(one_command[0],one_command) < 0) {
-			fprintf(stderr, "execv failed: %s\n", strerror(errno));
+char ** load_directories(){
+	FILE * dir_file=fopen("./shell-config","r");
+	char next[128];
+	int count=0;
+	while(fgets(next,128,dir_file)!=NULL){
+		count++;
+		//next[0]='\0';
+	}
+	fclose(dir_file);
+	char ** result=(char **)malloc(sizeof(char*)*(count+1));
+	result[count]=NULL;
+	dir_file=fopen("./shell-config","r");
+	int i=0;
+	while (fgets(next,128,dir_file)!=NULL){
+		next[strlen(next)-1]='\0';
+		result[i]=strdup(next);
+		//next[0]='\0';
+		i++;
+	}
+	fclose(dir_file);
+	return result;
+}
+void free_directories(char **dir_list){
+	int i=0;
+	while (dir_list[i]!=NULL){
+		free(dir_list[i]);
+		i++;
+	}
+	free(dir_list[i]);
+	free(dir_list);
+}
+int command_check(char ** one_command, char ** dir_list){
+	char temp[128];
+	int i=0;
+	int rv;
+	while (dir_list[i]!=NULL){
+		strcpy(temp,dir_list[i]);
+		temp[strlen(dir_list[i])]='/';
+		for (int j=0;j<strlen(one_command[0]);j++){
+			temp[strlen(dir_list[i])+1+j]=one_command[0][j];
 		}
+		temp[strlen(dir_list[i])+strlen(one_command[0])+1]='\0';
+		struct stat statresult;
+		rv=stat(temp,&statresult);
+		if (rv>=0){
+			//there exists such a program
+			char * new=strdup(temp);
+			char* tmp=one_command[0];
+			one_command[0]=new;
+			free(tmp);
+			break;
+		}
+		i++;
 	}
-	else {
-		// parent waits until child terminated
-		do {
-			tpid = wait(&child_status);
-			if (tpid == child_pid) { // if child terminated
-				free_tokens(one_command);
-				break;
-			}
-		} while(tpid != child_pid);
-	}
+	return rv;
 }
-
-void start_prompt() {
-	char buffer[1024];
-	int ex = 0;
-	int mode = SEQUENTIAL;
-	int new_mode = mode;
-	while (fgets(buffer, 1024, stdin) != NULL) {
-		
-		char *comment;
-		if ((comment = strchr(buffer, '#')) != NULL) {
-			*comment = '\0';
-		}		
-		
-		int i = 0;
-		char **commands = tokenify(buffer, ";");
-		char **one_command;
-		while (commands[i] != NULL) {
-			one_command = tokenify(commands[i], " \n\t");
-			//print_tokens(one_command);
-			if ((strcmp(one_command[0], "exit")) == 0) {
-				ex = 1;
-				i++;
-				continue;
-			}
-			if ((strcmp(one_command[0], "mode")) == 0) {
-				if (one_command[1] != NULL) {
-					if ((strcmp(one_command[1], "sequential")) == 0 ||
-								(strcmp(one_command[1], "s")) == 0) {
-						new_mode = SEQUENTIAL;
-					}
-					else if ((strcmp(one_command[1], "parallel")) == 0 ||
-								(strcmp(one_command[1], "p")) == 0) {
-						new_mode = PARALLEL;
-					}
-					else {
-						printf("Invalid mode, please try again.\n");
-					}
-				}
-				else {
-					printf("Current mode: %d\n", mode);
-				}
-				printf("Mode is: %d\n", mode);
-				i++;
-				continue;
-			}
-			//create_process(one_command);
-			
-			pid_t tpid;
-			int child_pid = fork();
-			int child_status;
-			if (child_pid < 0) {
-				fprintf(stderr, "fork failed, could not create child process\n");
-			} 
-			else if (child_pid == 0) {
-			// child: execv this command line
-				if (execv(one_command[0],one_command) < 0) {
-					fprintf(stderr, "execv failed: %s\n", strerror(errno));
-				}
-			}
-			else if ((child_pid > 0) && mode == SEQUENTIAL) {
-				// parent waits until child terminated
-				// printf("not in here");
-				do {
-					tpid = wait(&child_status);
-					if (tpid == child_pid) { // if child terminated
-						free_tokens(one_command);
-						break;
-					}
-				} while(tpid != child_pid);
+int main(int argc, char **argv) {
+	char ** dir_list=load_directories();
+	char * stop;
+	char buffer [1024];
+	printf("%s",PROMPT);
+	while (fgets(buffer,1024,stdin)!=NULL){
+		buffer[strlen(buffer)-1]='\0';
+		stop=strchr(buffer,'#');
+		if (stop!=NULL){
+			*stop='\0';
+		}
+		char ** commands=tokenify(buffer,";");
+		int i=0;
+		while (commands[i]!=NULL){
+			char ** one_command=tokenify(commands[i]," \n\t");
+			int rv=command_check(one_command,dir_list);
+			if (rv>=0){
+				print_tokens(one_command);
 			}
 			i++;
-		}
-		while (wait(NULL) > 0);
-		// exit after finishing all commands
-		if (ex == 1) {
-			exit(1);
-		}
-		if (new_mode != mode) {
-			mode = new_mode;
+			free_tokens(one_command);
 		}
 		free_tokens(commands);
-		printf("%s", PROMPT);
-		fflush(stdout);
+		printf("%s",PROMPT);
 	}
-	printf("\n"); // EOF reached, just print new line before exiting
-}
-
-int main(int argc, char **argv) {
-	printf("%s", PROMPT);
-	fflush(stdout);
-	start_prompt();
+	
+	free_directories(dir_list);
     return 0;
 }
 
