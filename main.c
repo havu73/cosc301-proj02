@@ -11,9 +11,11 @@
 #include <sys/stat.h>
 #include <poll.h>
 #include <signal.h>
-#define PROMPT "prompt >>> "
+#define PROMPT "prompt (lowercase)>>> "
 #define SEQUENTIAL 0 
 #define PARALLEL 1
+#define NOEXIT 0
+#define EXIT 1
 struct stat;
 /*
 char ** separate_command(char * buffer){
@@ -180,11 +182,158 @@ int command_check(char ** one_command, char ** dir_list){
 	}
 	return rv;
 }
+char ** get_commands(){
+	char * stop;
+	printf("%s",PROMPT);
+	char buffer[1024];
+	fgets(buffer,1024,stdin);
+	buffer[strlen(buffer)-1]='\0';
+	stop=strchr(buffer,'#');
+	if (stop!=NULL){
+		*stop='\0';
+	}
+	char ** commands=tokenify(buffer,";");
+	while(commands[0]==NULL){
+		printf("Please type in your commands\n");
+		printf("%s",PROMPT);
+		fgets(buffer,1024,stdin);
+		buffer[strlen(buffer)-1]='\0';
+		stop=strchr(buffer,'#');
+		if (stop!=NULL){
+			*stop='\0';
+		}
+		commands=tokenify(buffer,";");
+	}
+	return commands;
+}
+void sequential(int * mode,char ** commands){//if exit, need to free commands
+											//otherwise, no need
+	int ex=NOEXIT;
+	int i=0;
+	char ** dir_list=load_directories();
+	while (commands[i]!=NULL){
+		char ** one_command=tokenify(commands[i]," \n\t");
+
+		//////////CHECK SPECIAL COMMAND/////////
+		/////MODE
+		if (strcmp(one_command[0],"mode")==0){
+			if (one_command[1]==NULL){
+				printf("Current mode is SEQUENTIAL\n");
+				free_tokens(one_command);
+				i++;
+				continue;
+			}else if (strcmp(one_command[1],"p")==0 || strcmp(one_command[1],"parallel")==0){
+				printf("Mode changed to PARALLEL after all execution of current command\n");
+				free_tokens(one_command);
+				i++;
+				continue;
+			}else if(strcmp(one_command[1],"s")==0 || strcmp(one_command[1],"sequential")==0){
+				printf("Already in SEQUENTIAL mode\n");
+				free_tokens(one_command);
+				i++;
+				continue;
+			}else{
+				printf("Invalid command: mode %s\n",one_command[1]);
+				free_tokens(one_command);
+				i++;
+				continue;
+			}
+		}
+		/////EXIT
+		else if (strcmp(one_command[0],"exit")==0){
+			printf("Exit after execution of the command\n");
+			ex=EXIT;
+		////JOBS
+		}else if (strcmp(one_command[0],"jobs")==0){
+			printf("No other jobs running in sequential mode\n");
+			free_tokens(one_command);
+			i++;
+			continue;
+		////PAUSE
+		}else if (strcmp(one_command[0],"pause")==0){
+			printf("Pause is not a valid command in sequential mode\n");
+			free_tokens(one_command);
+			i++;
+			continue;
+		////RESUME
+		}else if (strcmp(one_command[0],"resume")==0){
+			printf("Resume is not a valid command in sequential mode\n");
+			free_tokens(one_command);
+			i++;
+			continue;
+		}
+		/////ELSE
+		else{
+			//////////CHECK COMMAND VALIDITY///////
+			struct stat statresult;
+			int rv=stat(one_command[0],&statresult);
+			if (rv<0){
+				rv=command_check(one_command,dir_list);
+				if (rv>=0){
+					pid_t pid=fork();
+					if (pid==0){
+						int exe=execv(one_command[0],one_command);
+						if (exe<0){
+							printf("Command failed. First word of command: %s",one_command[0]);
+						}
+					}else{
+						int status;
+						pid_t p;
+						p=wait(&status);
+					}
+					//print_tokens(one_command);
+				}else if (rv<0){
+					printf("Invalid command. First command word: %s.\n", one_command[0]);
+				}
+			}
+			else{
+				pid_t pid=fork();
+				if (pid==0){
+					int exe=execv(one_command[0],one_command);
+					if (exe<0){
+						printf("Command failed. First word of command: %s\n",one_command[0]);
+					}
+				}else{
+					int status;
+					pid_t p;
+					p=wait(&status);
+				}
+				//print_tokens(one_command);
+			}
+		}
+		///////FREE one_command/////
+		free_tokens(one_command);
+		/////i++////
+		i++;
+	}
+	///////IF EXIT///////
+	if (ex==EXIT){
+		free_directories(dir_list);
+		free_tokens(commands);
+		exit(EXIT_SUCCESS);
+	}
+	
+	free_directories(dir_list);
+}
 int main(int argc, char **argv) {
+	char ** commands;
+	//char** commands=get_commands();
+	//printf("%s\n",commands[0]);
+	//free_tokens(commands);
+	
+	int mode=SEQUENTIAL;
+	while(mode==SEQUENTIAL){
+		commands=get_commands();
+		sequential(&mode,commands);
+		free_tokens(commands);
+	}
+	
+	/*
 	char ** dir_list=load_directories();
 	char * stop;
 	char buffer [1024];
 	printf("%s",PROMPT);
+	int mode=SEQUENTIAL;
 	while (fgets(buffer,1024,stdin)!=NULL){
 		buffer[strlen(buffer)-1]='\0';
 		stop=strchr(buffer,'#');
@@ -195,8 +344,21 @@ int main(int argc, char **argv) {
 		int i=0;
 		while (commands[i]!=NULL){
 			char ** one_command=tokenify(commands[i]," \n\t");
-			int rv=command_check(one_command,dir_list);
-			if (rv>=0){
+			////////CHECK FOR SPECIAL COMMANDS///////
+			
+			////////CHECK VALIDITY OF COMMAND//////
+			struct stat statresult;
+			int rv=stat(one_command[0],&statresult);
+			if (rv<0){
+				rv=command_check(one_command,dir_list);
+				if (rv>=0){
+					print_tokens(one_command);
+				}
+				else{
+					printf("Invalid command. Try again\n");
+				}
+			}
+			else{
 				print_tokens(one_command);
 			}
 			i++;
@@ -208,5 +370,6 @@ int main(int argc, char **argv) {
 	
 	free_directories(dir_list);
     return 0;
+    */
 }
 
