@@ -11,78 +11,125 @@
 #include <sys/stat.h>
 #include <poll.h>
 #include <signal.h>
-#define PROMPT "prompt (lowercase)>>> "
+#define PROMPT "prompt(lowercase) >>> "
 #define SEQUENTIAL 0 
 #define PARALLEL 1
 #define NOEXIT 0
 #define EXIT 1
+#define CONTINUE 1
+#define DISCONTINUE 0
+#define RUNNING 1
+#define PAUSED 0
 struct stat;
-/*
-char ** separate_command(char * buffer){
-		int i=0;
-		int command=1;
-		while (i<strlen(buffer)&&buffer[i]!='#'){
-			if (buffer[i]==';'){
-				command++;
-			}
-			i++;
-		}
-		i=0;
-		char ** result= (char**)malloc((command+1)*sizeof(char*));
-		//checked: printf("%d\n",command+1);
-		result[command]=NULL;
-		//checked:  printf("%s\n",result[command]);
-		char str[128];
-		int strindex=0;
-		int index=0;
-		while (i<strlen(buffer)&& buffer[i]!='#'){
-			if (buffer[i]!=';'){
-				//checked:  printf("%c\n",buffer[i]);
-				str[strindex]=buffer[i];
-				strindex++;
-			}else{
-				str[strindex]='\0';
-				//checked: printf("%s\n",str);
-				strindex=0;
-				result[index]=strdup(str);
-				str[0]='\0';
-				index++;
-			}
-			i++;
-		}
-		str[strindex]='\0';
-		result[index]=strdup(str);
-		result[index+1]=NULL;
-		//checked: printf("%s\n", result[index+1]);
-		return result;
+struct pollfd;
+struct _process{
+	pid_t pid;
+	char ** command;
+	int state;
+	struct _process* next;
+};
+typedef struct _process process;
+
+void free_tokens(char **tokens) {
+    int i = 0;
+    while (tokens[i] != NULL) {
+        free(tokens[i]); // free each string
+        i++;
+    }
+    free(tokens); // then free the array
 }
-void free_command(char ** command){
-	int i=0;
-	while (command[i]!=NULL){
-		free(command[i]);
-		i++;
-	}
-	//printf ("Done with free\n");
-	free(command);
-	printf("Done with free\n");
-}
-int main(int argc, char **argv) {
-	printf ("prompt>>  ");
-	fflush(stdout);
-	char buffer[1024];
-	while (fgets(buffer,1024,stdin)!=NULL){
-		char ** result=separate_command(buffer);
-		int i=0;
-		while (result[i]!=NULL){
-			printf("%s\n",result[i]);
-			i++;
-		}
-		free_command(result);
-	}
-    return 0;
+process * add_process(process * head, pid_t pid, 
+						char ** command, int state) {
+	 if (head==NULL){
+        head= (process *)malloc(sizeof(process));
+        head->command=command;
+        //int * id = malloc(sizeof(int));
+        //*id=pid;
+        head -> pid=pid;
+        head ->state= state;
+        head->next=NULL;
+        return head;
+    }else{
+        process * newhead=(process *)malloc(sizeof(process));
+        newhead->command=command;
+        newhead->pid=pid;
+        newhead->state=state;
+        newhead->next=head;
+        return newhead;
+    }
 }
 
-*/
+process * delete_process (process* head, pid_t pid){
+	if (head->pid==pid){
+		process * tmp=head;
+		head=head->next;
+		free_tokens(tmp->command);
+		free(tmp);
+	}
+	else{
+		process * tmp=head;
+		while (tmp->next!=NULL){
+			process * before=tmp;
+			tmp=tmp->next;
+			if (tmp->pid==pid){
+				before->next=tmp->next;
+				free_tokens(tmp->command);
+				free(tmp);
+				break;
+			}
+		}
+	}
+	return head;
+}
+
+process * find_pid(process * head, pid_t pid){
+	if (head!=NULL && head->pid==pid){
+		return head;
+	}
+	else if(head==NULL){
+		return NULL;
+	}
+	else{
+		process * tmp=head;
+		while (tmp->next!=NULL){
+			tmp=tmp->next;
+			if (tmp->pid==pid){
+				return tmp;
+			}
+		}
+		return NULL;
+	}
+}
+
+void print_process (process * head){
+	if (head== NULL){
+		printf("There are no processes running\n");
+	}
+	else {
+		process * tmp=head;
+		while (tmp!=NULL){
+			char cmdprint[128];
+			int icommand=0;
+			int iprint=0;
+			while ((tmp->command)[icommand]!=NULL){
+				for (int i=0;i<strlen((tmp->command)[icommand]);i++){
+					cmdprint[iprint]=(tmp->command)[icommand][i];
+					iprint++;
+				}
+				cmdprint[iprint]=' ';
+				iprint++;
+				icommand++;
+			}
+			cmdprint[iprint]='\0';
+			if (tmp->state==PAUSED){
+				printf("Process ID: %d, Command: %s, State: paused\n",tmp->pid,cmdprint);
+			}else{
+				printf("Process ID: %d, Command: %s, State: running\n",tmp->pid,cmdprint);
+			}
+			tmp=tmp->next;
+		}
+	}
+}
 
 char** tokenify(const char *s, const char * delimiter) {
     // your code here
@@ -110,7 +157,7 @@ char** tokenify(const char *s, const char * delimiter) {
 }
 
 
-void print_tokens(char *tokens[]) {
+void print_tokens(char ** tokens) {
     int i = 0;
     while (tokens[i] != NULL) {
         printf("Token %d: %s\n", i+1, tokens[i]);
@@ -118,14 +165,7 @@ void print_tokens(char *tokens[]) {
     }
 }
 
-void free_tokens(char **tokens) {
-    int i = 0;
-    while (tokens[i] != NULL) {
-        free(tokens[i]); // free each string
-        i++;
-    }
-    free(tokens); // then free the array
-}
+
 char ** load_directories(){
 	FILE * dir_file=fopen("./shell-config","r");
 	char next[128];
@@ -206,6 +246,252 @@ char ** get_commands(){
 	}
 	return commands;
 }
+
+////////MODE//////////
+void mode_proc(char ** one_command, int * mode){
+	if (*mode==SEQUENTIAL){
+		if (one_command[1]==NULL){
+			printf("Current mode: SEQUENTIAL\n");
+		}
+		else if (strcmp(one_command[1],"p")==0 || strcmp(one_command[1],"parallel")==0){
+			printf("Mode will change to PARALLEL after execution of the last process\n");
+			*mode=PARALLEL;
+		}
+		else if (strcmp(one_command[1],"s")==0 || strcmp(one_command[1],"sequential")==0){
+			printf("Already in SEQUENTIAL mode\n");
+		}
+		else{
+			printf ("Invalid command: mode %s\n",one_command[1]);
+		}
+	}
+	else{
+		if (one_command[1]==NULL){
+			printf("Current mode: PARALLEL\n");
+		}
+		else if (strcmp(one_command[1],"p")==0 || strcmp(one_command[1],"parallel")==0){
+			printf("Already in PARALLEL mode\n");
+		}
+		else if (strcmp(one_command[1],"s")==0 || strcmp(one_command[1],"sequential")==0){
+			printf("Mode will change to SEQUENTIAL after execution of the last process\n");
+			*mode=SEQUENTIAL;
+		}
+		else{
+			printf ("Invalid command: mode %s\n",one_command[1]);
+		}
+	}
+	free_tokens(one_command);
+}
+
+//////EXIT///////
+void exit_proc(char ** one_command,int * ex){
+	if(one_command[1]==NULL){
+		*ex=EXIT;
+		printf("Exit after execution off all commands\n");
+		free_tokens(one_command);
+	}
+	else{
+		printf("Invalid command: exit %s\n",one_command[1]);
+	}
+}
+
+//////////////JOBS/////////////
+void jobs_proc(char** one_command,int *mode, process * head){
+	if (*mode==SEQUENTIAL){
+		printf("No other jobs running in sequential mode\n");
+	}else{
+		if (one_command[1]==NULL){
+			printf("List of current jobs: \n");
+			print_process(head);
+		}else{
+			printf("Invalid command: jobs %s\n",one_command[1]);
+		}
+	}
+	free_tokens(one_command);
+}
+
+//////////////PAUSE/////////
+void pause_proc(char** one_command,int * mode, process* head){
+	if (*mode==SEQUENTIAL){
+		printf("Pause is not a valid command in sequential mode\n");
+	}
+	else{
+		if (one_command[1]==NULL){
+			printf("Process ID not specified for pause\n");
+		}else{
+			int id =atoi(one_command[1]);
+			process * found_process=find_pid(head,id);
+			if (found_process==NULL){
+				printf("Pause: Process not found : %d\n",id);
+			}else{
+				found_process->state=PAUSED;
+				kill(id,SIGSTOP);
+			}
+		}
+	}
+	free_tokens(one_command);
+}
+
+//////////RESUME/////////
+void resume_proc(char ** one_command, int * mode, process * head){
+	if (*mode==SEQUENTIAL){
+		printf("Resume is not a valid command in sequential mode\n");
+	}
+	else{
+		if (one_command[1]==NULL){
+			printf("Process ID not specified for pause\n");
+		}else{
+			int id =atoi(one_command[1]);
+			process * found_process=find_pid(head,id);
+			if (found_process==NULL){
+				printf("Process not found : %d\n",id);
+			}else{
+				found_process->state=RUNNING;
+				kill(id,SIGCONT);
+			}
+		}
+	}
+	free_tokens(one_command);
+}
+
+void parallel(int *mode){
+	process * head=NULL;
+	int cont=CONTINUE;
+	char ** commands=get_commands();
+	int ex=NOEXIT;
+	char **dir_list=load_directories();
+	while (cont==CONTINUE){
+		int i=0;
+		while (commands[i]!=NULL){
+			char ** one_command=tokenify(commands[i]," \n\t");
+			///////////MODE
+			if (strcmp(one_command[0],"mode")==0){
+				mode_proc(one_command, mode);
+				if (*mode==SEQUENTIAL){
+					cont=DISCONTINUE;
+				}
+				i++;
+				continue;
+			}
+			///////////EXIT
+			else if (strcmp(one_command[0],"exit")==0){
+				exit_proc(one_command,&ex);
+				if (ex==EXIT){
+					cont=DISCONTINUE;
+				}
+				i++;
+				continue;
+			}
+			////////////JOBS
+			else if(strcmp(one_command[0],"jobs")==0){
+				jobs_proc(one_command,mode,head);
+				i++; 
+				continue;
+			}
+			/////////////PAUSE
+			else if (strcmp(one_command[0],"pause")==0){
+				pause_proc(one_command,mode,head);
+				i++;
+				continue;
+			}
+			////////////RESUME
+			else if (strcmp(one_command[0],"resume")==0){
+				resume_proc(one_command, mode, head);
+				i++;
+				continue;
+			}
+			////NULL
+			if (one_command[0]==NULL){
+				free_tokens(one_command);
+				i++;
+				continue;
+			}
+			//////////ELSE
+			//////////CHECK COMMAND VALIDITY
+			struct stat statresult;
+			int rv=stat(one_command[0],&statresult);
+			if (rv<0){
+				rv=command_check(one_command,dir_list);
+				if (rv>=0){
+					pid_t pid=fork();
+					if (pid==0){//child process
+						int exe=execv(one_command[0],one_command);
+						if (exe<0){
+							printf("Command failed. First word of command: %s",one_command[0]);
+						}
+					}else if(pid>0){//parents process
+						head=add_process(head,pid,one_command,RUNNING);
+					}else{
+						printf("Fork failed. Command: %s\n",one_command[0]);
+					}
+				}else if (rv<0){
+					printf("Invalid command. First command word: %s.\n", one_command[0]);
+				}
+			}
+			else{
+				pid_t pid=fork();
+				if (pid==0){
+					int exe=execv(one_command[0],one_command);
+					if (exe<0){
+						printf("Command failed. First word of command: %s\n",one_command[0]);
+					}
+				}else if (pid>0){
+					head=add_process(head,pid,one_command,RUNNING);
+				}else{
+					printf("Fork failed. Could not create child process. Command: %s\n",one_command[0]);
+				}
+			}
+			i++;
+		}
+		free_tokens(commands);
+		if (cont==DISCONTINUE){
+			//no checking for user input, only wait
+			while (head !=NULL){
+				int status;
+				int id=wait(&status);
+				if (id>0){
+					process * found_process=find_pid(head,id);
+					printf("Process terminated: ID: %d ;Command: %s\n",found_process->pid,found_process->command[0]);
+					head=delete_process(head,id);
+				}
+			}
+			free_directories(dir_list);
+		}else{
+			//check for user input, and then wait for any process if they terminated
+			int status;
+			struct pollfd pfd[1];
+			pfd[0].fd=0;
+			pfd[0].events=POLLIN;
+			pfd[0].revents=0;
+			while(1){
+				int rv=poll(&pfd[0],1,10000);
+				if (rv==0){//time out
+					pid_t terminated=waitpid(-1,&status,WNOHANG);
+					if (terminated>0){
+						process * found_process=find_pid(head,terminated);
+						printf("Process terminated: ID: %d ;Command: %s\n",found_process->pid,found_process->command[0]);
+						head=delete_process(head,terminated);
+					}
+				}else if(rv<0){
+					perror("poll");
+				}else if (rv>0){
+					char buffer[1024];
+					read(pfd[0].fd, buffer, sizeof(buffer));
+					buffer[strlen(buffer)-1] = '\0';
+					char *comment = NULL;
+					if ((comment = strchr(buffer, '#')) != NULL) {
+						*comment = '\0';
+					}
+				    commands = tokenify(buffer, ";");
+				    i = 0;
+					break;
+				}
+			}
+		}
+	}
+	if(ex==EXIT){
+		exit(1);
+	}
+}
 void sequential(int * mode,char ** commands){//if exit, need to free commands
 											//otherwise, no need
 	int ex=NOEXIT;
@@ -213,51 +499,36 @@ void sequential(int * mode,char ** commands){//if exit, need to free commands
 	char ** dir_list=load_directories();
 	while (commands[i]!=NULL){
 		char ** one_command=tokenify(commands[i]," \n\t");
-
 		//////////CHECK SPECIAL COMMAND/////////
 		/////MODE
 		if (strcmp(one_command[0],"mode")==0){
-			if (one_command[1]==NULL){
-				printf("Current mode is SEQUENTIAL\n");
-				free_tokens(one_command);
-				i++;
-				continue;
-			}else if (strcmp(one_command[1],"p")==0 || strcmp(one_command[1],"parallel")==0){
-				printf("Mode changed to PARALLEL after all execution of current command\n");
-				free_tokens(one_command);
-				i++;
-				continue;
-			}else if(strcmp(one_command[1],"s")==0 || strcmp(one_command[1],"sequential")==0){
-				printf("Already in SEQUENTIAL mode\n");
-				free_tokens(one_command);
-				i++;
-				continue;
-			}else{
-				printf("Invalid command: mode %s\n",one_command[1]);
-				free_tokens(one_command);
-				i++;
-				continue;
-			}
+			mode_proc(one_command,mode);
+			i++;
+			continue;
 		}
 		/////EXIT
 		else if (strcmp(one_command[0],"exit")==0){
-			printf("Exit after execution of the command\n");
-			ex=EXIT;
+			exit_proc(one_command,&ex);
+			i++;
+			continue;
 		////JOBS
 		}else if (strcmp(one_command[0],"jobs")==0){
-			printf("No other jobs running in sequential mode\n");
-			free_tokens(one_command);
+			jobs_proc(one_command,mode,NULL);
 			i++;
 			continue;
 		////PAUSE
 		}else if (strcmp(one_command[0],"pause")==0){
-			printf("Pause is not a valid command in sequential mode\n");
-			free_tokens(one_command);
+			pause_proc(one_command,mode,NULL);
 			i++;
 			continue;
 		////RESUME
 		}else if (strcmp(one_command[0],"resume")==0){
-			printf("Resume is not a valid command in sequential mode\n");
+			resume_proc(one_command,mode,NULL);
+			i++;
+			continue;
+		}
+		////NULL
+		if (one_command[0]==NULL){
 			free_tokens(one_command);
 			i++;
 			continue;
@@ -293,16 +564,19 @@ void sequential(int * mode,char ** commands){//if exit, need to free commands
 					if (exe<0){
 						printf("Command failed. First word of command: %s\n",one_command[0]);
 					}
-				}else{
+				}else if (pid>0){
 					int status;
 					pid_t p;
 					p=wait(&status);
+				}else{
+					printf("Fork failed. Could not create child process. Command: %s\n",one_command[0]);
 				}
 				//print_tokens(one_command);
 			}
+			///////FREE one_command/////
+			free_tokens(one_command);
 		}
-		///////FREE one_command/////
-		free_tokens(one_command);
+
 		/////i++////
 		i++;
 	}
@@ -320,56 +594,16 @@ int main(int argc, char **argv) {
 	//char** commands=get_commands();
 	//printf("%s\n",commands[0]);
 	//free_tokens(commands);
-	
+	while (1){
 	int mode=SEQUENTIAL;
 	while(mode==SEQUENTIAL){
 		commands=get_commands();
 		sequential(&mode,commands);
 		free_tokens(commands);
 	}
-	
-	/*
-	char ** dir_list=load_directories();
-	char * stop;
-	char buffer [1024];
-	printf("%s",PROMPT);
-	int mode=SEQUENTIAL;
-	while (fgets(buffer,1024,stdin)!=NULL){
-		buffer[strlen(buffer)-1]='\0';
-		stop=strchr(buffer,'#');
-		if (stop!=NULL){
-			*stop='\0';
-		}
-		char ** commands=tokenify(buffer,";");
-		int i=0;
-		while (commands[i]!=NULL){
-			char ** one_command=tokenify(commands[i]," \n\t");
-			////////CHECK FOR SPECIAL COMMANDS///////
-			
-			////////CHECK VALIDITY OF COMMAND//////
-			struct stat statresult;
-			int rv=stat(one_command[0],&statresult);
-			if (rv<0){
-				rv=command_check(one_command,dir_list);
-				if (rv>=0){
-					print_tokens(one_command);
-				}
-				else{
-					printf("Invalid command. Try again\n");
-				}
-			}
-			else{
-				print_tokens(one_command);
-			}
-			i++;
-			free_tokens(one_command);
-		}
-		free_tokens(commands);
-		printf("%s",PROMPT);
+	while (mode==PARALLEL){
+		parallel(&mode);
 	}
-	
-	free_directories(dir_list);
-    return 0;
-    */
+}
 }
 
